@@ -14,6 +14,8 @@ export class ViewerSession {
       iceServers: this.signal.ice,
       iceTransportPolicy: this.forceRelay ? "relay" : "all",
     }));
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.ontrack = (e) => this.onState({ stream: e.streams[0] || new MediaStream([e.track]) });
     this.dc = pc.createDataChannel("ctl", { ordered: true });
     this.dc.onopen = () => {
       this.onState({ rtc: "open" });
@@ -77,6 +79,7 @@ export class ViewerSession {
     let pair;
     stats.forEach((s) => {
       if (s.type === "transport" && s.selectedCandidatePairId) pair = stats.get(s.selectedCandidatePairId);
+      if (s.type === "inbound-rtp" && s.kind === "video") this.videoStats(s);
     });
     if (!pair) stats.forEach((s) => s.type === "candidate-pair" && s.nominated && s.state === "succeeded" && (pair = s));
     if (!pair) return;
@@ -84,6 +87,13 @@ export class ViewerSession {
     const remote = stats.get(pair.remoteCandidateId);
     const relay = local?.candidateType === "relay" || remote?.candidateType === "relay";
     this.onState({ route: relay ? "relay" : "direct" });
+  }
+
+  videoStats(s) {
+    const now = s.timestamp;
+    const kbps = this.lastVideo ? Math.round(((s.bytesReceived - this.lastVideo.bytes) * 8) / (now - this.lastVideo.at)) : 0;
+    this.lastVideo = { bytes: s.bytesReceived, at: now };
+    if (s.frameWidth) this.onState({ video: { w: s.frameWidth, h: s.frameHeight, fps: Math.round(s.framesPerSecond || 0), kbps } });
   }
 
   /** reason 沒給 = 使用者自己按中斷；retry = 可以自動重連；denied = Android 拒絕，不要重試。 */

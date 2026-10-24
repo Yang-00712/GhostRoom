@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.KeyguardManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -14,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.provider.Settings
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -21,6 +23,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.DefaultVideoEncoderFactory
+import org.webrtc.EglBase
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import java.util.concurrent.Executors
@@ -37,6 +42,10 @@ class SignalService : Service() {
 
     private lateinit var keys: Keys
     private lateinit var factory: PeerConnectionFactory
+    private lateinit var egl: EglBase
+    private lateinit var screen: ScreenShare
+    private var screenLock: PowerManager.WakeLock? = null
+    private var live = false
     private val gate = Gatekeeper()
     private var ws: WebSocket? = null
     private var ready = false
@@ -69,7 +78,12 @@ class SignalService : Service() {
         super.onCreate()
         startAsForeground()
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(applicationContext).createInitializationOptions())
-        factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
+        egl = EglBase.create()
+        factory = PeerConnectionFactory.builder()
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
+            .createPeerConnectionFactory()
+        screen = ScreenShare(applicationContext, factory, egl) { post { screenStopped() } }
         keys = Keys(Pairing.secret(this))
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(netCallback)
         exec.execute { connect() }
@@ -80,6 +94,14 @@ class SignalService : Service() {
             Pairing.setStandby(this, false)
             stopSelf()
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_PROJECTION) {
+            @Suppress("DEPRECATION")
+            val data: Intent? = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(EXTRA_DATA, Intent::class.java) else intent.getParcelableExtra(EXTRA_DATA)
+            if (data != null) {
+                promote(media = true)
+                post { startScreen(data) }
+            }
         }
         return START_STICKY
     }
@@ -93,7 +115,10 @@ class SignalService : Service() {
             cancelTimers()
             ws?.close(1000, "bye")
             ws = null
+            screen.stop()
+            wakeScreen(false)
             factory.dispose()
+            egl.release()
             Status.update { server = "⚪ 停止"; iphone = "⚪ 不在線"; session = "—" }
         }
         exec.shutdown()
@@ -116,8 +141,62 @@ class SignalService : Service() {
     private fun startAsForeground() {
         getSystemService(NotificationManager::class.java)
             .createNotificationChannel(NotificationChannel(CHANNEL, "待命", NotificationManager.IMPORTANCE_LOW))
-        if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFY_ID, notification(false), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        else startForeground(NOTIFY_ID, notification(false))
+        promote(media = false)
+    }
+
+    private fun promote(media: Boolean) {
+        val n = notification(live)
+        when {
+            Build.VERSION.SDK_INT >= 34 -> startForeground(
+                NOTIFY_ID, n,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or (if (media) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0),
+            )
+            media -> startForeground(NOTIFY_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            else -> startForeground(NOTIFY_ID, n)
+        }
+    }
+
+    private fun startScreen(data: Intent) {
+        runCatching { screen.start(data) }
+            .onSuccess { Status.update { this.screen = "🟢 可傳送"; message = "已允許傳送畫面" } }
+            .onFailure { e ->
+                screen.stop()
+                promote(media = false)
+                Status.update { this.screen = "⚠️ 未允許"; message = "無法開始傳送畫面：${e.message}" }
+            }
+    }
+
+    private fun screenStopped() {
+        screen.stop()
+        runCatching { promote(media = false) }
+        Status.update { this.screen = "⚠️ 未允許"; message = "傳送畫面的授權結束了，請在 Android 重新按「📺 允許傳送畫面」" }
+    }
+
+    private fun screenInfo(): JSONObject {
+        val km = getSystemService(KeyguardManager::class.java)
+        return JSONObject()
+            .put("shared", screen.active)
+            .put("on", getSystemService(PowerManager::class.java).isInteractive)
+            .put("locked", km.isKeyguardLocked)
+            .put("secure", km.isDeviceSecure)
+    }
+
+    /** 有人連進來看畫面時點亮螢幕；設定成滑動解鎖的話順便解開。 */
+    @Suppress("DEPRECATION")
+    private fun wakeScreen(on: Boolean) {
+        if (!on) {
+            screenLock?.takeIf { it.isHeld }?.release()
+            screenLock = null
+            return
+        }
+        if (!screen.active || screenLock?.isHeld == true) return
+        screenLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "ghostroom:screen")
+            .apply { acquire(4 * 60 * 60_000L) }
+        val locked = getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        if (locked && Settings.canDrawOverlays(this)) {
+            runCatching { startActivity(Intent(this, WakeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)) }
+        }
     }
 
     private fun connect() {
@@ -277,13 +356,15 @@ class SignalService : Service() {
         session?.end("新的連線取代了舊連線")
         Status.update { session = "🟡 連線中" }
         acquireWake()
-        session = PeerSession(this, factory, sid, ice, exec, ::sendRelay, ::onSessionEnded, ::onLive, gate::touch).also {
+        session = PeerSession(this, factory, sid, ice, exec, ::sendRelay, ::onSessionEnded, ::onLive, gate::touch, screen.track, ::screenInfo).also {
             it.acceptOffer(d.getString("sdp"), decision.ticket)
         }
     }
 
     private fun onLive(live: Boolean) {
+        this.live = live
         getSystemService(NotificationManager::class.java).notify(NOTIFY_ID, notification(live))
+        wakeScreen(live)
     }
 
     private fun onSessionEnded(ended: PeerSession, reason: String) {
@@ -331,6 +412,8 @@ class SignalService : Service() {
         private const val ICE_REFRESH_H = 2L
         private const val MAX_BACKOFF_MS = 15_000L
         const val ACTION_STOP = "tw.yang.ghostroom.STOP"
+        const val ACTION_PROJECTION = "tw.yang.ghostroom.PROJECTION"
+        const val EXTRA_DATA = "data"
 
         fun start(ctx: Context) {
             Pairing.setStandby(ctx, true)

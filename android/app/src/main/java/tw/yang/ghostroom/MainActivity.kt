@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -38,6 +39,8 @@ class MainActivity : Activity() {
     private lateinit var messageText: TextView
     private lateinit var standbyBtn: Button
     private lateinit var batteryBtn: Button
+    private lateinit var screenText: TextView
+    private lateinit var overlayBtn: Button
     private lateinit var qrBtn: Button
     private lateinit var qrImage: ImageView
     private val hideQr = Runnable { showQr(false) }
@@ -74,6 +77,25 @@ class MainActivity : Activity() {
         standbyBtn.text = if (Pairing.standby(this)) "⏹ 停止待命" else "▶ 開始待命"
         val pm = getSystemService(PowerManager::class.java)
         batteryBtn.visibility = if (pm.isIgnoringBatteryOptimizations(packageName)) View.GONE else View.VISIBLE
+        screenText.text = Status.screen
+        overlayBtn.visibility = if (Settings.canDrawOverlays(this)) View.GONE else View.VISIBLE
+    }
+
+    @Deprecated("Activity 版本沒有新的 API")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_SCREEN) return
+        if (resultCode != RESULT_OK || data == null) {
+            Status.update { message = "沒有允許傳送畫面" }
+            return
+        }
+        startForegroundService(Intent(this, SignalService::class.java).setAction(SignalService.ACTION_PROJECTION).putExtra(SignalService.EXTRA_DATA, data))
+    }
+
+    @Suppress("DEPRECATION")
+    private fun askScreen() {
+        if (!Pairing.standby(this)) SignalService.start(this)
+        startActivityForResult(getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent(), REQ_SCREEN)
     }
 
     private fun build(): View {
@@ -111,6 +133,17 @@ class MainActivity : Activity() {
                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
             }
             this += batteryBtn
+        }
+
+        col += card().apply {
+            this += title("📺 傳送畫面")
+            screenText = row(this, "畫面")
+            this += hint("在家先按一次「允許傳送畫面」，跳出視窗時選「整個螢幕」。之後只要不重開機，在外面連進來就看得到。螢幕鎖設成「滑動」的話，連進來時會自動解開。")
+            this += button("📺 允許傳送畫面") { askScreen() }
+            overlayBtn = button("🔓 允許自動點亮並解開螢幕（顯示在上層）") {
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            }
+            this += overlayBtn
         }
 
         col += card().apply {
@@ -285,6 +318,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val QR_MS = 120_000L
+        private const val REQ_SCREEN = 7
         private val CANVAS = 0xFFECFEFD.toInt()
         private val SURFACE = 0xFFFBFFFF.toInt()
         private val INPUT = 0xFFFCFFFF.toInt()

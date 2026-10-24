@@ -38,6 +38,7 @@ let pendingEnroll = null;
 let want = false;
 let retryCount = 0;
 let retryTimer = null;
+let screenNote = "";
 
 function say(el, text, kind = "") {
   el.textContent = text || "";
@@ -110,8 +111,47 @@ function onSignalState(s) {
   refreshButtons();
 }
 
+function screenProblem(screen) {
+  if (!screen.shared) return "⚠️ Android 還沒允許傳送畫面（回家在 Android 按「📺 允許傳送畫面」）";
+  if (screen.locked && screen.secure) return "🔒 Android 用指紋／密碼鎖著，遠端解不開";
+  if (!screen.on) return "💤 Android 螢幕關著（要在 Android 允許「顯示在上層」才能自動點亮）";
+  if (screen.locked) return "🔒 Android 停在鎖定畫面";
+  return "";
+}
+
+function showScreen(stream) {
+  const v = $("screenVideo");
+  if (!stream) {
+    v.srcObject = null;
+    $("screenBox").hidden = true;
+    $("screenBox").classList.remove("focus");
+    $("focusBtn").textContent = "⛶ 放大";
+    $("videoState").textContent = "—";
+    screenNote = "";
+    return;
+  }
+  v.srcObject = stream;
+  $("screenBox").hidden = false;
+  v.play().catch(() => {});
+}
+
+function toggleFocus() {
+  const on = $("screenBox").classList.toggle("focus");
+  $("focusBtn").textContent = on ? "✖ 縮小" : "⛶ 放大";
+}
+
 function onSessionState(s) {
   if (s.ticket) ticket = s.ticket;
+  if (s.stream) showScreen(s.stream);
+  if (s.info?.screen) {
+    const note = screenProblem(s.info.screen);
+    if (note && note !== screenNote) log(note);
+    screenNote = note;
+    if (note) $("videoState").textContent = note;
+  }
+  if (s.video && !screenNote) {
+    $("videoState").textContent = `${s.video.w}×${s.video.h}・${s.video.fps} fps・${(s.video.kbps / 1000).toFixed(1)} Mbps`;
+  }
   if (s.rtc === "connecting") {
     say($("mainMsg"), "正在建立連線…");
     log("開始連線");
@@ -123,6 +163,7 @@ function onSessionState(s) {
   }
   if (s.rtc === "closed") {
     for (const id of ["routeState", "rttState"]) $(id).textContent = "—";
+    showScreen(null);
     if (!s.reason) {
       say($("mainMsg"), "已中斷");
       log("已中斷");
@@ -375,6 +416,7 @@ function init() {
   $("bindBtn").onclick = bind;
   $("bindCancel").onclick = resetPairing;
   $("connectBtn").onclick = connectToggle;
+  $("focusBtn").onclick = toggleFocus;
   $("unpairBtn").onclick = unpair;
   $("forceRelay").checked = store.get(RELAY_KEY) === "1";
   $("forceRelay").onchange = (e) => store.set(RELAY_KEY, e.target.checked ? "1" : "0");

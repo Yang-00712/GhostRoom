@@ -9,6 +9,7 @@ object Status {
     @Volatile var iphone = "⚪ 不在線"
     @Volatile var session = "—"
     @Volatile var turn = "—"
+    @Volatile var screen = "⚠️ 未允許"
     @Volatile var message = ""
 
     private val main = Handler(Looper.getMainLooper())

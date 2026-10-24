@@ -10,9 +10,12 @@ import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpParameters
 import org.webrtc.RtpReceiver
+import org.webrtc.RtpSender
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.VideoTrack
 import java.nio.ByteBuffer
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
@@ -29,6 +32,8 @@ class PeerSession(
     private val onEnded: (PeerSession, String) -> Unit,
     private val onLive: (Boolean) -> Unit,
     private val onActivity: () -> Unit,
+    private val video: VideoTrack?,
+    private val screenInfo: () -> JSONObject,
 ) {
     private var pc: PeerConnection? = null
     private var channel: DataChannel? = null
@@ -58,6 +63,7 @@ class PeerSession(
         remoteSet = true
         pending.forEach { conn.addIceCandidate(it) }
         pending.clear()
+        video?.let { track -> conn.addTrack(track, listOf("screen"))?.let(::tune) }
         conn.createAnswer(object : Sdp() {
             override fun onCreateSuccess(desc: SessionDescription?) = exec.execute {
                 if (desc == null || closed) return@execute
@@ -88,6 +94,7 @@ class PeerSession(
         channel?.close()
         channel?.dispose()
         channel = null
+        pc?.senders?.forEach { it.setTrack(null, false) }
         pc?.dispose()
         pc = null
         onEnded(this, reason)
@@ -116,6 +123,18 @@ class PeerSession(
             .put("android", Build.VERSION.RELEASE)
             .put("battery", bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
             .put("charging", bm.isCharging)
+            .put("screen", screenInfo())
+    }
+
+    /** 行動網路下也順：限制位元率，畫面變化大時寧可降一點畫質也不要卡。 */
+    private fun tune(sender: RtpSender) {
+        val p = sender.parameters
+        p.degradationPreference = RtpParameters.DegradationPreference.BALANCED
+        p.encodings.forEach {
+            it.maxBitrateBps = MAX_BITRATE
+            it.maxFramerate = ScreenShare.FPS
+        }
+        sender.setParameters(p)
     }
 
     private val observer = object : PeerConnection.Observer {
@@ -171,5 +190,9 @@ class PeerSession(
         override fun onSetSuccess() = Unit
         override fun onCreateFailure(error: String?) = Unit
         override fun onSetFailure(error: String?) = Unit
+    }
+
+    companion object {
+        private const val MAX_BITRATE = 1_500_000
     }
 }

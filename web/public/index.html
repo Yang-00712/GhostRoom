@@ -60,6 +60,11 @@
           <span class="label">型號</span><span id="modelState">—</span>
           <span class="label">電量</span><span id="batteryState">—</span>
           <span class="label">中繼</span><span id="turnState">—</span>
+          <span class="label">畫面</span><span id="videoState">—</span>
+        </div>
+        <div id="screenBox" class="screen" hidden>
+          <video id="screenVideo" playsinline autoplay muted></video>
+          <button id="focusBtn" class="btn focus-toggle" type="button">⛶ 放大</button>
         </div>
         <button id="connectBtn" class="btn primary wide" type="button" disabled>🔗 連線</button>
         <label class="check"><input id="forceRelay" type="checkbox"> 強制走中繼（測試用）</label>
