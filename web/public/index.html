@@ -63,9 +63,11 @@
           <span class="label">畫面</span><span id="videoState">—</span>
         </div>
         <div id="screenBox" class="screen" hidden>
-          <video id="screenVideo" playsinline autoplay muted disableremoteplayback disablepictureinpicture x-webkit-airplay="deny"></video>
-          <div id="touchLayer" class="touch-layer"></div>
-          <button id="focusBtn" class="btn focus-toggle" type="button">⛶ 放大</button>
+          <div class="screen-view">
+            <video id="screenVideo" playsinline autoplay muted disableremoteplayback disablepictureinpicture x-webkit-airplay="deny"></video>
+            <div id="touchLayer" class="touch-layer"></div>
+            <button id="focusBtn" class="btn focus-toggle" type="button">⛶ 放大</button>
+          </div>
           <div id="navBar" class="nav-bar">
             <button class="btn nav-key" type="button" data-key="back">◁ 返回</button>
             <button class="btn nav-key" type="button" data-key="home">○ 主畫面</button>

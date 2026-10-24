@@ -168,7 +168,7 @@ class PeerSession(
         params.degradationPreference = RtpParameters.DegradationPreference.BALANCED
         params.encodings.forEach {
             it.maxBitrateBps = p.kbps * 1000
-            it.maxFramerate = p.fps.toDouble()
+            it.maxFramerate = p.fps
         }
         runCatching { sender.parameters = params }
     }
