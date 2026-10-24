@@ -1,4 +1,4 @@
-const CACHE = "ghostroom-v2";
+const CACHE = "ghostroom-v3";
 const SHELL = [
   "./",
   "index.html",

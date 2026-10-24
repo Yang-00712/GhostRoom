@@ -39,6 +39,7 @@ let want = false;
 let retryCount = 0;
 let retryTimer = null;
 let screenNote = "";
+let currentStream = null;
 
 function say(el, text, kind = "") {
   el.textContent = text || "";
@@ -119,10 +120,28 @@ function screenProblem(screen) {
   return "";
 }
 
+/** 只把 srcObject 清掉不夠：iPhone 會把它當成還在播的影片，卡在動態島和鎖定畫面。 */
+function releaseVideo(v) {
+  v.pause();
+  v.srcObject = null;
+  v.removeAttribute("src");
+  v.load();
+}
+
+function clearNowPlaying() {
+  if (!("mediaSession" in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = null;
+    navigator.mediaSession.playbackState = "none";
+  } catch {}
+}
+
 function showScreen(stream) {
   const v = $("screenVideo");
   if (!stream) {
-    v.srcObject = null;
+    currentStream = null;
+    releaseVideo(v);
+    clearNowPlaying();
     $("screenBox").hidden = true;
     $("screenBox").classList.remove("focus");
     $("focusBtn").textContent = "⛶ 放大";
@@ -130,6 +149,7 @@ function showScreen(stream) {
     screenNote = "";
     return;
   }
+  currentStream = stream;
   v.srcObject = stream;
   $("screenBox").hidden = false;
   v.play().catch(() => {});
@@ -374,6 +394,8 @@ function stopScan() {
   clearInterval(scanTimer);
   scanStream?.getTracks().forEach((t) => t.stop());
   scanStream = null;
+  releaseVideo($("scanVideo"));
+  clearNowPlaying();
   $("scanBox").hidden = true;
   $("scanBtn").hidden = false;
 }
@@ -399,8 +421,16 @@ function unpair() {
   resetPairing();
 }
 
+/** 切到背景就把影片放掉，回來再接上，避免 iPhone 把它當成背景播放。 */
+function sleep() {
+  stopScan();
+  releaseVideo($("screenVideo"));
+  clearNowPlaying();
+}
+
 function wake() {
   if (document.visibilityState !== "visible") return;
+  if (currentStream && live() && !$("screenVideo").srcObject) showScreen(currentStream);
   signal?.wake();
   askChallenge();
   if (want && !live()) setTimeout(retryNow, 800);
@@ -421,7 +451,8 @@ function init() {
   $("forceRelay").checked = store.get(RELAY_KEY) === "1";
   $("forceRelay").onchange = (e) => store.set(RELAY_KEY, e.target.checked ? "1" : "0");
 
-  document.addEventListener("visibilitychange", () => (document.visibilityState === "visible" ? wake() : stopScan()));
+  document.addEventListener("visibilitychange", () => (document.visibilityState === "visible" ? wake() : sleep()));
+  window.addEventListener("pagehide", sleep);
   for (const ev of ["pageshow", "focus", "online"]) window.addEventListener(ev, wake);
   setInterval(() => document.visibilityState === "visible" && askChallenge(), 30_000);
 

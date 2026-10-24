@@ -28,7 +28,7 @@
       <p class="hint">在 Android 的 GhostRoom 按「📷 顯示配對 QR」，再用這裡掃描。配對碼只存在這支 iPhone 裡。</p>
       <button id="scanBtn" class="btn primary wide" type="button">📷 掃描配對 QR</button>
       <div id="scanBox" class="scan" hidden>
-        <video id="scanVideo" playsinline muted></video>
+        <video id="scanVideo" playsinline muted disableremoteplayback x-webkit-airplay="deny"></video>
         <button id="scanStop" class="btn" type="button">✖ 停止掃描</button>
       </div>
       <details class="manual">
@@ -63,7 +63,7 @@
           <span class="label">畫面</span><span id="videoState">—</span>
         </div>
         <div id="screenBox" class="screen" hidden>
-          <video id="screenVideo" playsinline autoplay muted></video>
+          <video id="screenVideo" playsinline autoplay muted disableremoteplayback disablepictureinpicture x-webkit-airplay="deny"></video>
           <button id="focusBtn" class="btn focus-toggle" type="button">⛶ 放大</button>
         </div>
         <button id="connectBtn" class="btn primary wide" type="button" disabled>🔗 連線</button>
