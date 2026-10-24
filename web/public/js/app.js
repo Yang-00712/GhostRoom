@@ -149,6 +149,7 @@ function showScreen(stream) {
     releaseVideo(v);
     clearNowPlaying();
     $("screenBox").hidden = true;
+    $("controlHint").hidden = true;
     $("screenBox").classList.remove("focus");
     $("focusBtn").textContent = "⛶ 放大";
     $("videoState").textContent = "—";
@@ -158,7 +159,59 @@ function showScreen(stream) {
   currentStream = stream;
   v.srcObject = stream;
   $("screenBox").hidden = false;
+  $("controlHint").hidden = false;
   v.play().catch(() => {});
+}
+
+/** 手指在影片上的位置換成 0~1 比例。影片用 object-fit: contain，要扣掉上下或左右的黑邊。 */
+function videoNorm(ev) {
+  const v = $("screenVideo");
+  if (!v.videoWidth) return null;
+  const r = v.getBoundingClientRect();
+  const scale = Math.min(r.width / v.videoWidth, r.height / v.videoHeight);
+  const dw = v.videoWidth * scale;
+  const dh = v.videoHeight * scale;
+  const x = (ev.clientX - r.left - (r.width - dw) / 2) / dw;
+  const y = (ev.clientY - r.top - (r.height - dh) / 2) / dh;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+  return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 };
+}
+
+let gesture = null;
+
+function onTouchDown(ev) {
+  if (!live()) return;
+  const p = videoNorm(ev);
+  if (!p) return;
+  ev.preventDefault();
+  $("touchLayer").setPointerCapture?.(ev.pointerId);
+  gesture = { id: ev.pointerId, t0: performance.now(), pts: [[p.x, p.y, 0]] };
+}
+
+function onTouchMove(ev) {
+  if (!gesture || ev.pointerId !== gesture.id) return;
+  const p = videoNorm(ev);
+  if (!p) return;
+  ev.preventDefault();
+  const ms = Math.round(performance.now() - gesture.t0);
+  const last = gesture.pts[gesture.pts.length - 1];
+  if (ms - last[2] >= 16 || Math.abs(p.x - last[0]) > 0.004 || Math.abs(p.y - last[1]) > 0.004) {
+    gesture.pts.push([p.x, p.y, ms]);
+    if (gesture.pts.length > 120) gesture.pts.splice(1, 1);
+  }
+}
+
+function onTouchUp(ev) {
+  if (!gesture || ev.pointerId !== gesture.id) return;
+  ev.preventDefault();
+  const p = videoNorm(ev);
+  if (p) gesture.pts.push([p.x, p.y, Math.round(performance.now() - gesture.t0)]);
+  session?.send({ t: "gesture", pts: gesture.pts });
+  gesture = null;
+}
+
+function navKey(k) {
+  if (live()) session.send({ t: "key", k });
 }
 
 const diag = { android: null, rx: null };
@@ -172,6 +225,13 @@ function showDiag() {
   if (a?.tx?.limit && a.tx.limit !== "none") parts.push(`受限 ${a.tx.limit}`);
   if (diag.rx) parts.push(`收 ${diag.rx.packets} 包・解 ${diag.rx.decoded} 格`);
   $("diag").textContent = parts.length ? `診斷：${parts.join("・")}` : "";
+  if (a && !$("screenBox").hidden) {
+    $("controlHint").textContent =
+      a.control === false
+        ? "⚠️ 點了沒反應：請在 Android 開啟「🖐 遠端操作（無障礙）」"
+        : "點畫面就能操作 Android。◁ 返回　○ 主畫面　▢ 多工。";
+    $("controlHint").className = a.control === false ? "status error" : "hint";
+  }
 }
 
 function toggleFocus() {
@@ -488,6 +548,13 @@ function init() {
   $("connectBtn").onclick = connectToggle;
   $("focusBtn").onclick = toggleFocus;
   $("unpairBtn").onclick = unpair;
+
+  const layer = $("touchLayer");
+  layer.addEventListener("pointerdown", onTouchDown);
+  layer.addEventListener("pointermove", onTouchMove);
+  layer.addEventListener("pointerup", onTouchUp);
+  layer.addEventListener("pointercancel", onTouchUp);
+  for (const btn of document.querySelectorAll(".nav-key")) btn.onclick = () => navKey(btn.dataset.key);
   $("forceRelay").checked = store.get(RELAY_KEY) === "1";
   $("forceRelay").onchange = (e) => store.set(RELAY_KEY, e.target.checked ? "1" : "0");
 

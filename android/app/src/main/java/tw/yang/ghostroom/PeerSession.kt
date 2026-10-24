@@ -34,6 +34,7 @@ class PeerSession(
     private val onActivity: () -> Unit,
     private val video: VideoTrack?,
     private val screenInfo: () -> JSONObject,
+    private val onControl: (JSONObject) -> Unit,
 ) {
     private var pc: PeerConnection? = null
     private var channel: DataChannel? = null
@@ -120,6 +121,10 @@ class PeerSession(
                 refreshTx()
                 reply(JSONObject().put("t", "pong").put("ts", m.opt("ts")).put("info", deviceInfo()))
             }
+            "gesture", "key" -> {
+                onActivity()
+                onControl(m)
+            }
         }
     }
 
@@ -132,6 +137,7 @@ class PeerSession(
             .put("charging", bm.isCharging)
             .put("screen", screenInfo())
             .put("video", hasVideo)
+            .put("control", ControlService.enabled)
             .put("tx", tx)
     }
 

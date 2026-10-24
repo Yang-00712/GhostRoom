@@ -41,6 +41,7 @@ class MainActivity : Activity() {
     private lateinit var batteryBtn: Button
     private lateinit var screenText: TextView
     private lateinit var overlayBtn: Button
+    private lateinit var controlText: TextView
     private lateinit var qrBtn: Button
     private lateinit var qrImage: ImageView
     private val hideQr = Runnable { showQr(false) }
@@ -79,6 +80,7 @@ class MainActivity : Activity() {
         batteryBtn.visibility = if (pm.isIgnoringBatteryOptimizations(packageName)) View.GONE else View.VISIBLE
         screenText.text = Status.screen
         overlayBtn.visibility = if (Settings.canDrawOverlays(this)) View.GONE else View.VISIBLE
+        controlText.text = if (ControlService.enabled) "🟢 已開啟" else "⚠️ 未開啟"
     }
 
     @Deprecated("Activity 版本沒有新的 API")
@@ -144,6 +146,15 @@ class MainActivity : Activity() {
                 startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             }
             this += overlayBtn
+        }
+
+        col += card().apply {
+            this += title("🖐 遠端操作")
+            controlText = row(this, "控制")
+            this += hint("要能從 iPhone 點擊、滑動，需開啟無障礙服務：按下面按鈕 → 找到並打開 GhostRoom → 允許。三星可能要先按「允許受限設定」。")
+            this += button("🖐 開啟遠端操作（無障礙）") {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
         }
 
         col += card().apply {

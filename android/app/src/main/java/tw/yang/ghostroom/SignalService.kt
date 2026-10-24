@@ -359,9 +359,13 @@ class SignalService : Service() {
         session?.end("新的連線取代了舊連線")
         Status.update { session = "🟡 連線中" }
         acquireWake()
-        session = PeerSession(this, factory, sid, ice, exec, ::sendRelay, ::onSessionEnded, ::onLive, gate::touch, screen.track, ::screenInfo).also {
+        session = PeerSession(this, factory, sid, ice, exec, ::sendRelay, ::onSessionEnded, ::onLive, gate::touch, screen.track, ::screenInfo, ::onControl).also {
             it.acceptOffer(d.getString("sdp"), decision.ticket)
         }
+    }
+
+    private fun onControl(msg: JSONObject) {
+        ControlService.instance?.handle(msg)
     }
 
     private fun onLive(live: Boolean) {

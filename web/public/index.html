@@ -64,8 +64,15 @@
         </div>
         <div id="screenBox" class="screen" hidden>
           <video id="screenVideo" playsinline autoplay muted disableremoteplayback disablepictureinpicture x-webkit-airplay="deny"></video>
+          <div id="touchLayer" class="touch-layer"></div>
           <button id="focusBtn" class="btn focus-toggle" type="button">⛶ 放大</button>
+          <div id="navBar" class="nav-bar">
+            <button class="btn nav-key" type="button" data-key="back">◁ 返回</button>
+            <button class="btn nav-key" type="button" data-key="home">○ 主畫面</button>
+            <button class="btn nav-key" type="button" data-key="recents">▢ 多工</button>
+          </div>
         </div>
+        <p id="controlHint" class="hint" hidden>點畫面就能操作 Android。沒反應的話，請在 Android 開啟「🖐 遠端操作（無障礙）」。</p>
         <p id="diag" class="hint diag"></p>
         <button id="connectBtn" class="btn primary wide" type="button" disabled>🔗 連線</button>
         <label class="check"><input id="forceRelay" type="checkbox"> 強制走中繼（測試用）</label>

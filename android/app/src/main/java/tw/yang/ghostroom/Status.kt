@@ -10,6 +10,7 @@ object Status {
     @Volatile var session = "—"
     @Volatile var turn = "—"
     @Volatile var screen = "⚠️ 未允許"
+    @Volatile var control = "⚠️ 未開啟"
     @Volatile var message = ""
 
     private val main = Handler(Looper.getMainLooper())
