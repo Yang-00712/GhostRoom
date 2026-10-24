@@ -35,7 +35,10 @@ class PeerSession(
     private val video: VideoTrack?,
     private val screenInfo: () -> JSONObject,
     private val onControl: (JSONObject) -> Unit,
+    private val onQuality: (String) -> Unit,
 ) {
+    private var videoSender: RtpSender? = null
+    private var profile: Profile = ScreenShare.SMOOTH
     private var pc: PeerConnection? = null
     private var channel: DataChannel? = null
     private val pending = mutableListOf<IceCandidate>()
@@ -69,7 +72,8 @@ class PeerSession(
         video?.let { track ->
             val sender = conn.addTrack(track, listOf("screen"))
             hasVideo = sender != null
-            sender?.let(::tune)
+            videoSender = sender
+            sender?.let { tune(it, profile) }
         }
         conn.createAnswer(object : Sdp() {
             override fun onCreateSuccess(desc: SessionDescription?) = exec.execute {
@@ -125,6 +129,7 @@ class PeerSession(
                 onActivity()
                 onControl(m)
             }
+            "quality" -> onQuality(m.optString("p"))
         }
     }
 
@@ -138,6 +143,7 @@ class PeerSession(
             .put("screen", screenInfo())
             .put("video", hasVideo)
             .put("control", ControlService.enabled)
+            .put("quality", profile.id)
             .put("tx", tx)
     }
 
@@ -156,15 +162,21 @@ class PeerSession(
         }
     }
 
-    /** 行動網路下也順：限制位元率，畫面變化大時寧可降一點畫質也不要卡。 */
-    private fun tune(sender: RtpSender) {
-        val p = sender.parameters
-        p.degradationPreference = RtpParameters.DegradationPreference.BALANCED
-        p.encodings.forEach {
-            it.maxBitrateBps = MAX_BITRATE
-            it.maxFramerate = ScreenShare.FPS
+    /** 行動網路下也順：限制位元率和格數，畫面變化大時寧可降一點畫質也不要卡。 */
+    private fun tune(sender: RtpSender, p: Profile) {
+        val params = sender.parameters
+        params.degradationPreference = RtpParameters.DegradationPreference.BALANCED
+        params.encodings.forEach {
+            it.maxBitrateBps = p.kbps * 1000
+            it.maxFramerate = p.fps.toDouble()
         }
-        sender.setParameters(p)
+        runCatching { sender.parameters = params }
+    }
+
+    /** iPhone 切換流暢／清晰時呼叫，只調這條連線的位元率和格數。 */
+    fun setProfile(p: Profile) {
+        profile = p
+        videoSender?.let { tune(it, p) }
     }
 
     private val observer = object : PeerConnection.Observer {
@@ -222,7 +234,4 @@ class PeerSession(
         override fun onSetFailure(error: String?) = Unit
     }
 
-    companion object {
-        private const val MAX_BITRATE = 1_500_000
-    }
 }

@@ -5,6 +5,7 @@ import * as faceId from "./webauthn.js";
 
 const PAIR_KEY = "gr.pair";
 const RELAY_KEY = "gr.forceRelay";
+const QUALITY_KEY = "gr.quality";
 const CHALLENGE_TTL_MS = 100_000;
 const RETRY_DELAYS_S = [1, 2, 4, 8, 15];
 const $ = (id) => document.getElementById(id);
@@ -150,6 +151,7 @@ function showScreen(stream) {
     clearNowPlaying();
     $("screenBox").hidden = true;
     $("controlHint").hidden = true;
+    $("qualityRow").hidden = true;
     $("screenBox").classList.remove("focus");
     $("focusBtn").textContent = "⛶ 放大";
     $("videoState").textContent = "—";
@@ -160,6 +162,7 @@ function showScreen(stream) {
   v.srcObject = stream;
   $("screenBox").hidden = false;
   $("controlHint").hidden = false;
+  $("qualityRow").hidden = false;
   v.play().catch(() => {});
 }
 
@@ -214,6 +217,23 @@ function navKey(k) {
   if (live()) session.send({ t: "key", k });
 }
 
+let quality = store.get(QUALITY_KEY) === "clear" ? "clear" : "smooth";
+
+function markQuality() {
+  for (const btn of document.querySelectorAll(".q-opt")) btn.classList.toggle("active", btn.dataset.q === quality);
+}
+
+function sendQuality() {
+  if (live()) session.send({ t: "quality", p: quality });
+}
+
+function setQuality(q) {
+  quality = q;
+  store.set(QUALITY_KEY, q);
+  markQuality();
+  sendQuality();
+}
+
 const diag = { android: null, rx: null };
 
 /** 一行看出畫面卡在哪一段：Android 錄 → 編碼 → 送出 → iPhone 收 → 解碼。 */
@@ -265,6 +285,7 @@ function onSessionState(s) {
     openedAt = Date.now();
     gotVideo = false;
     retryCount = 0;
+    sendQuality();
     say($("mainMsg"), "已連上 Android，加密通道已建立", "ok");
     log("加密通道已建立");
   }
@@ -555,6 +576,8 @@ function init() {
   layer.addEventListener("pointerup", onTouchUp);
   layer.addEventListener("pointercancel", onTouchUp);
   for (const btn of document.querySelectorAll(".nav-key")) btn.onclick = () => navKey(btn.dataset.key);
+  for (const btn of document.querySelectorAll(".q-opt")) btn.onclick = () => setQuality(btn.dataset.q);
+  markQuality();
   $("forceRelay").checked = store.get(RELAY_KEY) === "1";
   $("forceRelay").onchange = (e) => store.set(RELAY_KEY, e.target.checked ? "1" : "0");
 

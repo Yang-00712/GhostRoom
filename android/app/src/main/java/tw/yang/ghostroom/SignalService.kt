@@ -359,13 +359,20 @@ class SignalService : Service() {
         session?.end("新的連線取代了舊連線")
         Status.update { session = "🟡 連線中" }
         acquireWake()
-        session = PeerSession(this, factory, sid, ice, exec, ::sendRelay, ::onSessionEnded, ::onLive, gate::touch, screen.track, ::screenInfo, ::onControl).also {
+        session = PeerSession(this, factory, sid, ice, exec, ::sendRelay, ::onSessionEnded, ::onLive, gate::touch, screen.track, ::screenInfo, ::onControl, ::onQuality).also {
             it.acceptOffer(d.getString("sdp"), decision.ticket)
         }
     }
 
     private fun onControl(msg: JSONObject) {
         ControlService.instance?.handle(msg)
+    }
+
+    private fun onQuality(id: String) {
+        val p = ScreenShare.profileOf(id)
+        screen.applyProfile(p)
+        session?.setProfile(p)
+        Status.update { message = if (p.id == "clear") "畫質：清晰" else "畫質：流暢" }
     }
 
     private fun onLive(live: Boolean) {
