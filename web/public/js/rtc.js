@@ -93,6 +93,7 @@ export class ViewerSession {
     const now = s.timestamp;
     const kbps = this.lastVideo ? Math.round(((s.bytesReceived - this.lastVideo.bytes) * 8) / (now - this.lastVideo.at)) : 0;
     this.lastVideo = { bytes: s.bytesReceived, at: now };
+    this.onState({ rx: { packets: s.packetsReceived || 0, decoded: s.framesDecoded || 0, dropped: s.framesDropped || 0, kbps } });
     if (s.frameWidth) this.onState({ video: { w: s.frameWidth, h: s.frameHeight, fps: Math.round(s.framesPerSecond || 0), kbps } });
   }
 

@@ -144,6 +144,8 @@ function showScreen(stream) {
   const v = $("screenVideo");
   if (!stream) {
     currentStream = null;
+    diag.android = diag.rx = null;
+    $("diag").textContent = "";
     releaseVideo(v);
     clearNowPlaying();
     $("screenBox").hidden = true;
@@ -157,6 +159,19 @@ function showScreen(stream) {
   v.srcObject = stream;
   $("screenBox").hidden = false;
   v.play().catch(() => {});
+}
+
+const diag = { android: null, rx: null };
+
+/** 一行看出畫面卡在哪一段：Android 錄 → 編碼 → 送出 → iPhone 收 → 解碼。 */
+function showDiag() {
+  const a = diag.android;
+  const parts = [];
+  if (a?.screen?.frames != null) parts.push(`錄 ${a.screen.frames}（補 ${a.screen.repeats ?? 0}）`);
+  if (a?.tx?.enc != null) parts.push(`編碼 ${a.tx.enc}${a.tx.impl ? `（${a.tx.impl}）` : ""}`);
+  if (a?.tx?.limit && a.tx.limit !== "none") parts.push(`受限 ${a.tx.limit}`);
+  if (diag.rx) parts.push(`收 ${diag.rx.packets} 包・解 ${diag.rx.decoded} 格`);
+  $("diag").textContent = parts.length ? `診斷：${parts.join("・")}` : "";
 }
 
 function toggleFocus() {
@@ -175,7 +190,10 @@ function onSessionState(s) {
     if (note) $("videoState").textContent = note;
     if (!note && !gotVideo && openedAt && Date.now() - openedAt > VIDEO_WAIT_MS) noVideo();
   }
-  if (s.video) gotVideo = true;
+  if (s.info) diag.android = s.info;
+  if (s.rx) diag.rx = s.rx;
+  if (s.info || s.rx) showDiag();
+  if (s.video?.fps > 0) gotVideo = true;
   if (s.video && !screenNote) {
     $("videoState").textContent = `${s.video.w}×${s.video.h}・${s.video.fps} fps・${(s.video.kbps / 1000).toFixed(1)} Mbps`;
   }

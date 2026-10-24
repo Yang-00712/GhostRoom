@@ -15,8 +15,8 @@ android {
         applicationId = "tw.yang.ghostroom"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         buildConfigField("String", "DEFAULT_SERVER", "\"https://ghostroom-3r4.pages.dev\"")
     }
 
@@ -24,6 +24,7 @@ android {
         if (keystorePath != null) {
             create("fixed") {
                 storeFile = file(keystorePath)
+                storeType = "pkcs12"
                 storePassword = System.getenv("GR_KEYSTORE_PASS")
                 keyAlias = System.getenv("GR_KEY_ALIAS")
                 keyPassword = System.getenv("GR_KEY_PASS")

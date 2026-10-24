@@ -43,6 +43,8 @@ class PeerSession(
     private var dropTimer: ScheduledFuture<*>? = null
 
     private var ticket: String? = null
+    private var tx = JSONObject()
+    private var hasVideo = false
 
     fun acceptOffer(sdp: String, ticket: String?) {
         this.ticket = ticket
@@ -63,7 +65,11 @@ class PeerSession(
         remoteSet = true
         pending.forEach { conn.addIceCandidate(it) }
         pending.clear()
-        video?.let { track -> conn.addTrack(track, listOf("screen"))?.let(::tune) }
+        video?.let { track ->
+            val sender = conn.addTrack(track, listOf("screen"))
+            hasVideo = sender != null
+            sender?.let(::tune)
+        }
         conn.createAnswer(object : Sdp() {
             override fun onCreateSuccess(desc: SessionDescription?) = exec.execute {
                 if (desc == null || closed) return@execute
@@ -111,6 +117,7 @@ class PeerSession(
         when (m.optString("t")) {
             "ping" -> {
                 onActivity()
+                refreshTx()
                 reply(JSONObject().put("t", "pong").put("ts", m.opt("ts")).put("info", deviceInfo()))
             }
         }
@@ -124,6 +131,23 @@ class PeerSession(
             .put("battery", bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
             .put("charging", bm.isCharging)
             .put("screen", screenInfo())
+            .put("video", hasVideo)
+            .put("tx", tx)
+    }
+
+    /** 編碼器那段的數字，給 iPhone 顯示診斷用。結果下一次 ping 才帶回去。 */
+    private fun refreshTx() {
+        pc?.getStats { report ->
+            val out = report.statsMap.values.firstOrNull { it.type == "outbound-rtp" && it.members["kind"] == "video" } ?: return@getStats
+            val m = out.members
+            val json = JSONObject()
+                .put("enc", (m["framesEncoded"] as? Number)?.toLong() ?: 0)
+                .put("sent", (m["framesSent"] as? Number)?.toLong() ?: 0)
+                .put("bytes", m["bytesSent"]?.toString() ?: "0")
+                .put("impl", m["encoderImplementation"]?.toString() ?: "")
+                .put("limit", m["qualityLimitationReason"]?.toString() ?: "")
+            runCatching { exec.execute { tx = json } }
+        }
     }
 
     /** 行動網路下也順：限制位元率，畫面變化大時寧可降一點畫質也不要卡。 */

@@ -179,6 +179,8 @@ class SignalService : Service() {
             .put("on", getSystemService(PowerManager::class.java).isInteractive)
             .put("locked", km.isKeyguardLocked)
             .put("secure", km.isDeviceSecure)
+            .put("frames", screen.frames)
+            .put("repeats", screen.repeats)
     }
 
     /** 有人連進來看畫面時點亮螢幕；設定成滑動解鎖的話順便解開。 */
@@ -194,7 +196,8 @@ class SignalService : Service() {
             .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "ghostroom:screen")
             .apply { acquire(4 * 60 * 60_000L) }
         val locked = getSystemService(KeyguardManager::class.java).isKeyguardLocked
-        if (locked && Settings.canDrawOverlays(this)) {
+        val dark = !getSystemService(PowerManager::class.java).isInteractive
+        if ((locked || dark) && Settings.canDrawOverlays(this)) {
             runCatching { startActivity(Intent(this, WakeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)) }
         }
     }
@@ -363,6 +366,7 @@ class SignalService : Service() {
 
     private fun onLive(live: Boolean) {
         this.live = live
+        if (live) Status.update { iphone = "🟢 在線" }
         getSystemService(NotificationManager::class.java).notify(NOTIFY_ID, notification(live))
         wakeScreen(live)
     }

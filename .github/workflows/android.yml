@@ -32,6 +32,10 @@ jobs:
           GR_KEY_ALIAS: ${{ secrets.GR_KEY_ALIAS }}
           GR_KEY_PASS: ${{ secrets.GR_KEY_PASS }}
         run: gradle --no-daemon testReleaseUnitTest assembleRelease
+      - name: signer
+        run: |
+          signer=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          "$signer" verify --print-certs android/app/build/outputs/apk/release/*.apk | grep -E "SHA-256|DN"
       - uses: actions/upload-artifact@v4
         with:
           name: ghostroom-apk
