@@ -17,7 +17,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-        buildConfigField("String", "DEFAULT_SERVER", "\"https://ghostroom.pages.dev\"")
+        buildConfigField("String", "DEFAULT_SERVER", "\"https://ghostroom-3r4.pages.dev\"")
     }
 
     signingConfigs {
