@@ -40,6 +40,10 @@ let retryCount = 0;
 let retryTimer = null;
 let screenNote = "";
 let currentStream = null;
+let openedAt = 0;
+let gotVideo = false;
+let videoRetried = false;
+const VIDEO_WAIT_MS = 6000;
 
 function say(el, text, kind = "") {
   el.textContent = text || "";
@@ -166,9 +170,12 @@ function onSessionState(s) {
   if (s.info?.screen) {
     const note = screenProblem(s.info.screen);
     if (note && note !== screenNote) log(note);
+    if (!note && screenNote) $("videoState").textContent = "⏳ 等待畫面…";
     screenNote = note;
     if (note) $("videoState").textContent = note;
+    if (!note && !gotVideo && openedAt && Date.now() - openedAt > VIDEO_WAIT_MS) noVideo();
   }
+  if (s.video) gotVideo = true;
   if (s.video && !screenNote) {
     $("videoState").textContent = `${s.video.w}×${s.video.h}・${s.video.fps} fps・${(s.video.kbps / 1000).toFixed(1)} Mbps`;
   }
@@ -177,11 +184,14 @@ function onSessionState(s) {
     log("開始連線");
   }
   if (s.rtc === "open") {
+    openedAt = Date.now();
+    gotVideo = false;
     retryCount = 0;
     say($("mainMsg"), "已連上 Android，加密通道已建立", "ok");
     log("加密通道已建立");
   }
   if (s.rtc === "closed") {
+    openedAt = 0;
     for (const id of ["routeState", "rttState"]) $(id).textContent = "—";
     showScreen(null);
     if (!s.reason) {
@@ -206,6 +216,17 @@ function onSessionState(s) {
     $("batteryState").textContent = s.info.battery >= 0 ? `${s.info.battery}%${s.info.charging ? " ⚡" : ""}` : "—";
   }
   refreshButtons();
+}
+
+/** Android 說可以傳畫面，但這次連線沒帶畫面（通常是連上之後才按允許）：自動重連一次。 */
+function noVideo() {
+  if (videoRetried || !ticket || !live()) {
+    $("videoState").textContent = "⚠️ 畫面沒送過來，請按「中斷」再按「連線」";
+    return;
+  }
+  videoRetried = true;
+  log("這次連線沒有畫面，自動重連一次");
+  session.close("重新連線以接收畫面", { retry: true });
 }
 
 function openSession(auth) {
@@ -254,6 +275,7 @@ async function connectToggle() {
     return;
   }
   retryCount = 0;
+  videoRetried = false;
   if (ticket) {
     want = true;
     openSession({ type: "ticket", ticket });
