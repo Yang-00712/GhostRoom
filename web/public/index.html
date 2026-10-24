@@ -39,6 +39,17 @@
       <p id="pairMsg" class="status" role="status"></p>
     </section>
 
+    <section id="bindView" class="card" hidden>
+      <h2 class="section-title">🔐 綁定 Face ID</h2>
+      <p class="hint">配對碼收到了。最後一步：趁 Android 還顯示 QR（2 分鐘內），按下面的按鈕用 Face ID 綁定。之後每次連線都要 Face ID，別人就算拍到 QR 也連不進來。</p>
+      <div class="grid">
+        <span class="label">Android</span><span id="bindPeer">⚪ 離線</span>
+      </div>
+      <button id="bindBtn" class="btn primary wide" type="button" disabled>🔐 用 Face ID 綁定這支 iPhone</button>
+      <p id="bindMsg" class="status" role="status"></p>
+      <button id="bindCancel" class="btn wide" type="button">↩ 重新掃 QR</button>
+    </section>
+
     <section id="mainView" hidden>
       <div class="card">
         <h2 class="section-title">📱 家裡的 Android</h2>

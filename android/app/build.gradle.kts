@@ -58,4 +58,6 @@ dependencies {
     implementation("io.getstream:stream-webrtc-android:1.3.10")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.zxing:core:3.5.3")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20260814")
 }

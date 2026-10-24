@@ -16,6 +16,9 @@ object Pairing {
     private const val KEY_SECRET = "secret"
     private const val KEY_SERVER = "server"
     private const val KEY_STANDBY = "standby"
+    private const val KEY_VIEWER_ID = "viewerCredId"
+    private const val KEY_VIEWER_KEY = "viewerSpki"
+    private const val KEY_ENROLL_UNTIL = "enrollUntil"
 
     private fun prefs(ctx: Context): SharedPreferences = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -26,9 +29,35 @@ object Pairing {
 
     fun regenerate(ctx: Context): ByteArray {
         val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        prefs(ctx).edit().putString(KEY_SECRET, b64uEncode(bytes)).apply()
+        prefs(ctx).edit().putString(KEY_SECRET, b64uEncode(bytes)).remove(KEY_VIEWER_ID).remove(KEY_VIEWER_KEY).apply()
         return bytes
     }
+
+    fun viewer(ctx: Context): Viewer? {
+        val p = prefs(ctx)
+        val id = p.getString(KEY_VIEWER_ID, null) ?: return null
+        val key = p.getString(KEY_VIEWER_KEY, null) ?: return null
+        return Viewer(id, b64uDecode(key))
+    }
+
+    fun setViewer(ctx: Context, viewer: Viewer) {
+        prefs(ctx).edit().putString(KEY_VIEWER_ID, viewer.credId).putString(KEY_VIEWER_KEY, b64uEncode(viewer.spki)).remove(KEY_ENROLL_UNTIL).commit()
+    }
+
+    fun clearViewer(ctx: Context) {
+        prefs(ctx).edit().remove(KEY_VIEWER_ID).remove(KEY_VIEWER_KEY).apply()
+    }
+
+    /** 只有 Android 正在顯示 QR 的這段時間，才接受新的 iPhone 綁定。 */
+    fun openEnroll(ctx: Context, ms: Long) {
+        prefs(ctx).edit().putLong(KEY_ENROLL_UNTIL, System.currentTimeMillis() + ms).apply()
+    }
+
+    fun closeEnroll(ctx: Context) {
+        prefs(ctx).edit().remove(KEY_ENROLL_UNTIL).apply()
+    }
+
+    fun enrollOpen(ctx: Context): Boolean = System.currentTimeMillis() < prefs(ctx).getLong(KEY_ENROLL_UNTIL, 0)
 
     fun server(ctx: Context): String = prefs(ctx).getString(KEY_SERVER, null) ?: BuildConfig.DEFAULT_SERVER
 
@@ -80,13 +109,12 @@ class Keys(secret: ByteArray) {
 
     /** 解不開、時間差太大或重複都會丟例外。 */
     @Synchronized
-    fun open(fromRole: String, box: String): JSONObject {
+    fun open(fromRole: String, box: String, now: Long = System.currentTimeMillis()): JSONObject {
         val raw = Pairing.b64uDecode(box)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, aes, GCMParameterSpec(128, raw, 0, 12))
         cipher.updateAAD("$room|$fromRole".toByteArray(Charsets.UTF_8))
         val msg = JSONObject(String(cipher.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8))
-        val now = System.currentTimeMillis()
         if (abs(now - msg.getLong("ts")) > MAX_SKEW_MS) throw IllegalStateException("訊息時間差太大，請確認兩支手機的時間都是自動設定")
         val n = msg.getString("n")
         if (seen.containsKey(n)) throw IllegalStateException("重複的訊息")

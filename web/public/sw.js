@@ -1,4 +1,4 @@
-const CACHE = "ghostroom-v1";
+const CACHE = "ghostroom-v2";
 const SHELL = [
   "./",
   "index.html",
@@ -7,6 +7,7 @@ const SHELL = [
   "js/crypto.js",
   "js/signal.js",
   "js/rtc.js",
+  "js/webauthn.js",
   "vendor/jsQR.js",
   "manifest.webmanifest",
   "icons/icon-192.png",

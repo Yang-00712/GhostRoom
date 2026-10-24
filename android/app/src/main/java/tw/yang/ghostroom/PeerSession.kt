@@ -27,6 +27,8 @@ class PeerSession(
     private val exec: ScheduledExecutorService,
     private val send: (String, JSONObject) -> Unit,
     private val onEnded: (PeerSession, String) -> Unit,
+    private val onLive: (Boolean) -> Unit,
+    private val onActivity: () -> Unit,
 ) {
     private var pc: PeerConnection? = null
     private var channel: DataChannel? = null
@@ -35,7 +37,10 @@ class PeerSession(
     private var closed = false
     private var dropTimer: ScheduledFuture<*>? = null
 
-    fun acceptOffer(sdp: String) {
+    private var ticket: String? = null
+
+    fun acceptOffer(sdp: String, ticket: String?) {
+        this.ticket = ticket
         val config = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
@@ -58,7 +63,7 @@ class PeerSession(
                 if (desc == null || closed) return@execute
                 conn.setLocalDescription(object : Sdp() {
                     override fun onSetSuccess() = exec.execute {
-                        send("answer", JSONObject().put("sid", sid).put("sdp", desc.description))
+                        send("answer", JSONObject().put("sid", sid).put("sdp", desc.description).put("ticket", ticket))
                     }
                     override fun onSetFailure(error: String?) = exec.execute { end("無法建立回應：$error") }
                 }, desc)
@@ -77,6 +82,7 @@ class PeerSession(
     fun end(reason: String) {
         if (closed) return
         closed = true
+        onLive(false)
         dropTimer?.cancel(false)
         channel?.unregisterObserver()
         channel?.close()
@@ -96,7 +102,10 @@ class PeerSession(
     private fun onChannelMessage(text: String) {
         val m = runCatching { JSONObject(text) }.getOrNull() ?: return
         when (m.optString("t")) {
-            "ping" -> reply(JSONObject().put("t", "pong").put("ts", m.opt("ts")).put("info", deviceInfo()))
+            "ping" -> {
+                onActivity()
+                reply(JSONObject().put("t", "pong").put("ts", m.opt("ts")).put("info", deviceInfo()))
+            }
         }
     }
 
@@ -120,6 +129,7 @@ class PeerSession(
             when (state) {
                 PeerConnection.IceConnectionState.CONNECTED, PeerConnection.IceConnectionState.COMPLETED -> {
                     dropTimer?.cancel(false)
+                    onLive(true)
                     Status.update { session = "🟢 已連線" }
                 }
                 PeerConnection.IceConnectionState.DISCONNECTED -> {

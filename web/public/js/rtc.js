@@ -9,7 +9,7 @@ export class ViewerSession {
     this.closed = false;
   }
 
-  async start() {
+  async start(auth) {
     const pc = (this.pc = new RTCPeerConnection({
       iceServers: this.signal.ice,
       iceTransportPolicy: this.forceRelay ? "relay" : "all",
@@ -20,29 +20,35 @@ export class ViewerSession {
       this.pingTimer = setInterval(() => this.ping(), STATS_MS);
       this.ping();
     };
-    this.dc.onclose = () => this.close("Android 那邊關閉了連線");
+    this.dc.onclose = () => this.close("和 Android 的連線中斷了", { retry: true });
     this.dc.onmessage = (e) => this.message(e.data);
     pc.onicecandidate = (e) => e.candidate && this.signal.send("ice", { sid: this.sid, c: e.candidate.toJSON() });
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed") this.close(this.forceRelay ? "中繼連不上：TURN 可能還沒設定" : "連不上 Android：網路被擋，請試「強制走中繼」");
+      if (pc.connectionState === "failed") {
+        this.close(this.forceRelay ? "中繼連不上：TURN 可能還沒設定" : "連不上 Android：網路被擋，請試「強制走中繼」", { retry: true });
+      }
     };
-    this.timeout = setTimeout(() => this.dc.readyState !== "open" && this.close("20 秒內沒連上，請確認 Android 在待命"), CONNECT_TIMEOUT_MS);
+    this.timeout = setTimeout(() => this.dc.readyState !== "open" && this.close("20 秒內沒連上，請確認 Android 在待命", { retry: true }), CONNECT_TIMEOUT_MS);
 
     this.onState({ rtc: "connecting" });
     await pc.setLocalDescription(await pc.createOffer());
-    await this.signal.send("offer", { sid: this.sid, sdp: pc.localDescription.sdp });
+    const sent = await this.signal.send("offer", { sid: this.sid, sdp: pc.localDescription.sdp, auth });
+    if (!sent) this.close("伺服器斷線中，稍後自動重試", { retry: true });
   }
 
   async handle(kind, d) {
-    if (!this.pc || d?.sid !== this.sid) return;
+    if (!this.pc || this.closed || d?.sid !== this.sid) return;
     if (kind === "answer") {
+      if (d.ticket) this.onState({ ticket: d.ticket });
       await this.pc.setRemoteDescription({ type: "answer", sdp: d.sdp });
       for (const c of this.pending.splice(0)) await this.pc.addIceCandidate(c).catch(() => {});
     } else if (kind === "ice") {
       if (this.pc.remoteDescription) await this.pc.addIceCandidate(d.c).catch(() => {});
       else this.pending.push(d.c);
+    } else if (kind === "denied") {
+      this.close(d.reason || "Android 拒絕了這次連線", { denied: true });
     } else if (kind === "bye") {
-      this.close(d.reason || "Android 結束了連線");
+      this.close(d.reason || "Android 結束了連線", { retry: true });
     }
   }
 
@@ -80,14 +86,15 @@ export class ViewerSession {
     this.onState({ route: relay ? "relay" : "direct" });
   }
 
-  close(reason) {
+  /** reason 沒給 = 使用者自己按中斷；retry = 可以自動重連；denied = Android 拒絕，不要重試。 */
+  close(reason, { retry = false, denied = false } = {}) {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.pingTimer);
     clearTimeout(this.timeout);
-    this.signal.send("bye", { sid: this.sid });
+    if (!denied) this.signal.send("bye", { sid: this.sid });
     this.dc?.close();
     this.pc?.close();
-    this.onState({ rtc: "closed", reason });
+    this.onState({ rtc: "closed", reason, retry, denied });
   }
 }

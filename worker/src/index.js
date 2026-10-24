@@ -5,6 +5,7 @@ const HELLO_TIMEOUT_MS = 10_000;
 const MAX_FAILS = 10;
 const FAIL_WINDOW_MS = 10 * 60_000;
 const MAX_MESSAGE = 64 * 1024;
+const MAX_PENDING = 20;
 const TURN_TTL_S = 6 * 3600;
 const STUN_ONLY = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 
@@ -13,6 +14,12 @@ const other = (role) => (role === "device" ? "viewer" : "device");
 async function sha256hex(text) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function trySend(ws, text) {
+  try {
+    ws.send(text);
+  } catch {}
 }
 
 function sameHex(a, b) {
@@ -41,10 +48,13 @@ export class Room extends DurableObject {
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
-  async fetch() {
+  async fetch(request) {
+    const pending = this.ctx.getWebSockets().filter((ws) => !ws.deserializeAttachment()?.role).length;
+    if (pending >= MAX_PENDING) return new Response("busy", { status: 429 });
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ role: null, at: Date.now() });
+    const ip = request.headers.get("CF-Connecting-IP") || "local";
+    server.serializeAttachment({ role: null, at: Date.now(), ip });
     if ((await this.ctx.storage.getAlarm()) == null) await this.ctx.storage.setAlarm(Date.now() + HELLO_TIMEOUT_MS + 500);
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -77,22 +87,27 @@ export class Room extends DurableObject {
       return ws.close(1007, "bad json");
     }
     const att = ws.deserializeAttachment() || {};
-    if (!att.role) return this.hello(ws, msg);
+    if (!att.role) {
+      if (att.helloing) return;
+      ws.serializeAttachment({ ...att, helloing: true });
+      return this.hello(ws, msg, att);
+    }
 
     if (msg.t === "relay" && typeof msg.box === "string") {
       const out = JSON.stringify({ t: "relay", box: msg.box });
-      for (const peer of this.sockets(other(att.role))) peer.send(out);
+      for (const peer of this.sockets(other(att.role))) trySend(peer, out);
     } else if (msg.t === "ice") {
-      ws.send(JSON.stringify({ t: "ice", ...(await this.iceServers(att.role)) }));
+      trySend(ws, JSON.stringify({ t: "ice", ...(await this.iceServers(att.role)) }));
     }
   }
 
-  async hello(ws, msg) {
+  async hello(ws, msg, att) {
     if (msg.t !== "hello" || !ROLES.includes(msg.role) || typeof msg.auth !== "string" || msg.auth.length > 128) {
       return ws.close(4000, "hello required");
     }
     const now = Date.now();
-    let fails = (await this.ctx.storage.get("fails")) || { n: 0, since: now };
+    const failKey = `fails:${att.ip}`;
+    let fails = (await this.ctx.storage.get(failKey)) || { n: 0, since: now };
     if (now - fails.since > FAIL_WINDOW_MS) fails = { n: 0, since: now };
     if (fails.n >= MAX_FAILS) return ws.close(4029, "locked");
 
@@ -105,17 +120,20 @@ export class Room extends DurableObject {
     }
     if (!sameHex(hash, stored)) {
       fails.n += 1;
-      await this.ctx.storage.put("fails", fails);
+      await this.ctx.storage.put(failKey, fails);
       return ws.close(4003, "bad auth");
     }
-    if (fails.n) await this.ctx.storage.delete("fails");
+    if (fails.n) await this.ctx.storage.delete(failKey);
+    if (ws.readyState !== WebSocket.OPEN) return;
 
     for (const old of this.sockets(msg.role)) old.close(4001, "replaced");
     ws.serializeAttachment({ role: msg.role });
+    const ice = await this.iceServers(msg.role);
+    if (ws.deserializeAttachment()?.role !== msg.role || ws.readyState !== WebSocket.OPEN) return;
     const peers = this.sockets(other(msg.role));
-    ws.send(JSON.stringify({ t: "ready", peer: peers.length > 0, ...(await this.iceServers(msg.role)) }));
+    trySend(ws, JSON.stringify({ t: "ready", peer: peers.length > 0, ...ice }));
     const online = JSON.stringify({ t: "peer", online: true });
-    for (const peer of peers) peer.send(online);
+    for (const peer of peers) trySend(peer, online);
   }
 
   async webSocketClose(ws, code) {

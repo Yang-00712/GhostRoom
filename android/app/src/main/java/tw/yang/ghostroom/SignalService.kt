@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -25,6 +26,7 @@ import org.webrtc.PeerConnectionFactory
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 class SignalService : Service() {
     private val exec = Executors.newSingleThreadScheduledExecutor()
@@ -35,19 +37,25 @@ class SignalService : Service() {
 
     private lateinit var keys: Keys
     private lateinit var factory: PeerConnectionFactory
+    private val gate = Gatekeeper()
     private var ws: WebSocket? = null
     private var ready = false
     private var stopped = false
     private var retry = 0
+    private var lastRx = 0L
+    private var network: Network? = null
     private var retryTimer: ScheduledFuture<*>? = null
     private var pingTimer: ScheduledFuture<*>? = null
+    private var iceTimer: ScheduledFuture<*>? = null
     private var ice: List<PeerConnection.IceServer> = emptyList()
     private var session: PeerSession? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     private val netCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
-            post { if (ws == null && !stopped) reconnectNow() }
+        override fun onAvailable(network: Network) = post {
+            val changed = this@SignalService.network != null && this@SignalService.network != network
+            this@SignalService.network = network
+            if (!stopped && (changed || ws == null)) reconnectNow()
         }
     }
 
@@ -82,7 +90,7 @@ class SignalService : Service() {
             stopped = true
             session?.end("Android 停止待命")
             retryTimer?.cancel(false)
-            pingTimer?.cancel(false)
+            cancelTimers()
             ws?.close(1000, "bye")
             ws = null
             factory.dispose()
@@ -92,21 +100,24 @@ class SignalService : Service() {
         super.onDestroy()
     }
 
-    private fun startAsForeground() {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "待命", NotificationManager.IMPORTANCE_LOW))
+    private fun notification(live: Boolean): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 1, Intent(this, SignalService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
-        val notification = Notification.Builder(this, CHANNEL)
+        return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.presence_online)
-            .setContentTitle("GhostRoom 待命中")
-            .setContentText("iPhone 連線時這裡會顯示")
+            .setContentTitle(if (live) "📱 iPhone 正在連線" else "GhostRoom 待命中")
+            .setContentText(if (live) "不是你在用的話，按「停止待命」" else "iPhone 連線時這裡會顯示")
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, "⏹ 停止待命", stop).build())
             .build()
-        if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFY_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        else startForeground(NOTIFY_ID, notification)
+    }
+
+    private fun startAsForeground() {
+        getSystemService(NotificationManager::class.java)
+            .createNotificationChannel(NotificationChannel(CHANNEL, "待命", NotificationManager.IMPORTANCE_LOW))
+        if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFY_ID, notification(false), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        else startForeground(NOTIFY_ID, notification(false))
     }
 
     private fun connect() {
@@ -119,9 +130,11 @@ class SignalService : Service() {
 
     private fun reconnectNow() {
         retryTimer?.cancel(false)
+        cancelTimers()
         retry = 0
         ws?.cancel()
         ws = null
+        ready = false
         connect()
     }
 
@@ -130,13 +143,21 @@ class SignalService : Service() {
         retryTimer = exec.schedule({ connect() }, delayMs, TimeUnit.MILLISECONDS)
     }
 
+    private fun cancelTimers() {
+        pingTimer?.cancel(false)
+        iceTimer?.cancel(false)
+    }
+
     private inner class Listener : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             webSocket.send(JSONObject().put("t", "hello").put("role", "device").put("auth", keys.auth).toString())
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) = post {
-            if (webSocket === ws) receive(text)
+            if (webSocket === ws) {
+                lastRx = System.currentTimeMillis()
+                receive(text)
+            }
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = post {
@@ -151,7 +172,7 @@ class SignalService : Service() {
     private fun dropped(code: Int) {
         ws = null
         ready = false
-        pingTimer?.cancel(false)
+        cancelTimers()
         Status.update { iphone = "⚪ 不在線" }
         when (code) {
             4001 -> {
@@ -160,12 +181,12 @@ class SignalService : Service() {
                 return
             }
             4029 -> {
-                Status.update { server = "🔴 鎖住"; message = "密碼錯太多次，10 分鐘後自動再試" }
+                Status.update { server = "🔴 鎖住"; message = "嘗試太多次，10 分鐘後自動再試" }
                 return scheduleRetry(10 * 60_000L)
             }
         }
         Status.update { server = "🔴 斷線，重試中" }
-        scheduleRetry(minOf(30_000L, 1000L shl minOf(retry++, 5)))
+        scheduleRetry(minOf(MAX_BACKOFF_MS, 500L shl minOf(retry++, 5)) + Random.nextLong(500))
     }
 
     private fun receive(text: String) {
@@ -177,8 +198,9 @@ class SignalService : Service() {
                 retry = 0
                 ice = parseIce(msg.optJSONArray("ice"))
                 val turn = msg.optBoolean("turn")
-                pingTimer?.cancel(false)
-                pingTimer = exec.scheduleWithFixedDelay({ ws?.send("ping") }, 25, 25, TimeUnit.SECONDS)
+                cancelTimers()
+                pingTimer = exec.scheduleWithFixedDelay({ heartbeat() }, PING_S, PING_S, TimeUnit.SECONDS)
+                iceTimer = exec.scheduleWithFixedDelay({ ws?.send("{\"t\":\"ice\"}") }, ICE_REFRESH_H, ICE_REFRESH_H, TimeUnit.HOURS)
                 Status.update {
                     server = "🟢 已連線"
                     this.turn = if (turn) "🟢 可用" else "⚠️ 未設定"
@@ -203,20 +225,65 @@ class SignalService : Service() {
         }
     }
 
+    /** 伺服器那頭其實已經斷了但沒通知時，靠這裡發現。 */
+    private fun heartbeat() {
+        if (System.currentTimeMillis() - lastRx > SILENT_MS) {
+            Status.update { server = "🟡 連線沒回應，重連中" }
+            reconnectNow()
+            return
+        }
+        ws?.send("ping")
+    }
+
     private fun onRelay(kind: String, d: JSONObject) {
         val sid = d.optString("sid")
         when (kind) {
-            "offer" -> {
-                session?.end("新的連線取代了舊連線")
-                Status.update { session = "🟡 連線中" }
-                acquireWake()
-                session = PeerSession(this, factory, sid, ice, exec, ::sendRelay, ::onSessionEnded).also {
-                    it.acceptOffer(d.getString("sdp"))
-                }
-            }
+            "challenge" -> sendRelay("challenge", JSONObject().put("nonce", gate.challenge()))
+            "enroll" -> enroll(d)
+            "offer" -> offer(sid, d)
             "ice" -> if (session?.sid == sid) session?.addIce(d.getJSONObject("c"))
             "bye" -> if (session?.sid == sid) session?.end("iPhone 結束了連線")
         }
+    }
+
+    private fun enroll(d: JSONObject) {
+        val reply = JSONObject()
+        if (!Pairing.enrollOpen(this)) {
+            sendRelay("enrolled", reply.put("ok", false).put("reason", "Android 沒有在顯示配對 QR：請在 Android 按「📷 顯示配對 QR」，2 分鐘內再按綁定"))
+            return
+        }
+        val viewer = runCatching {
+            Viewer(d.getString("credId"), Pairing.b64uDecode(d.getString("spki"))).also { WebAuthn.parseKey(it.spki) }
+        }.getOrNull()
+        if (viewer == null || viewer.credId.isEmpty()) {
+            sendRelay("enrolled", reply.put("ok", false).put("reason", "Face ID 金鑰格式不對，請再試一次"))
+            return
+        }
+        Pairing.setViewer(this, viewer)
+        gate.reset()
+        sendRelay("enrolled", reply.put("ok", true))
+        Status.update { message = "已綁定 iPhone（Face ID）" }
+    }
+
+    private fun offer(sid: String, d: JSONObject) {
+        val server = Uri.parse(Pairing.server(this))
+        val origin = "${server.scheme}://${server.encodedAuthority}"
+        val decision = gate.check(d.optJSONObject("auth"), Pairing.viewer(this), server.host ?: "", origin)
+        if (!decision.ok) {
+            sendRelay("denied", JSONObject().put("sid", sid).put("reason", decision.reason))
+            Status.update { message = "擋下一次連線：${decision.reason}" }
+            return
+        }
+        session?.end("新的連線取代了舊連線")
+        Status.update { session = "🟡 連線中" }
+        acquireWake()
+        session = PeerSession(this, factory, sid, ice, exec, ::sendRelay, ::onSessionEnded, ::onLive, gate::touch).also {
+            it.acceptOffer(d.getString("sdp"), decision.ticket)
+        }
+    }
+
+    private fun onLive(live: Boolean) {
+        getSystemService(NotificationManager::class.java).notify(NOTIFY_ID, notification(live))
     }
 
     private fun onSessionEnded(ended: PeerSession, reason: String) {
@@ -259,6 +326,10 @@ class SignalService : Service() {
     companion object {
         private const val CHANNEL = "standby"
         private const val NOTIFY_ID = 1
+        private const val PING_S = 20L
+        private const val SILENT_MS = 50_000L
+        private const val ICE_REFRESH_H = 2L
+        private const val MAX_BACKOFF_MS = 15_000L
         const val ACTION_STOP = "tw.yang.ghostroom.STOP"
 
         fun start(ctx: Context) {

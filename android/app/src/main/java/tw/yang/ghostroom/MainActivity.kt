@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     private lateinit var iphoneText: TextView
     private lateinit var sessionText: TextView
     private lateinit var turnText: TextView
+    private lateinit var boundText: TextView
     private lateinit var messageText: TextView
     private lateinit var standbyBtn: Button
     private lateinit var batteryBtn: Button
@@ -67,6 +68,8 @@ class MainActivity : Activity() {
         iphoneText.text = Status.iphone
         sessionText.text = Status.session
         turnText.text = Status.turn
+        boundText.text = if (Pairing.viewer(this) != null) "🔐 已綁定 Face ID" else "⚠️ 還沒綁定"
+        if (qrImage.visibility == View.VISIBLE && !Pairing.enrollOpen(this)) showQr(false)
         messageText.text = Status.message
         standbyBtn.text = if (Pairing.standby(this)) "⏹ 停止待命" else "▶ 開始待命"
         val pm = getSystemService(PowerManager::class.java)
@@ -112,7 +115,8 @@ class MainActivity : Activity() {
 
         col += card().apply {
             this += title("🔑 配對 iPhone")
-            this += hint("iPhone 打開 GhostRoom 網頁，按「📷 掃描配對 QR」對準這裡。QR 等於鑰匙，不要給別人看，2 分鐘後自動收起。")
+            boundText = row(this, "綁定")
+            this += hint("iPhone 打開 GhostRoom，按「📷 掃描配對 QR」對準這裡，再按「🔐 用 Face ID 綁定」。只有 QR 顯示的 2 分鐘內能綁定新的 iPhone，QR 不要給別人看。")
             qrBtn = button("📷 顯示配對 QR") { showQr(qrImage.visibility != View.VISIBLE) }
             this += qrBtn
             qrImage = ImageView(this@MainActivity).apply {
@@ -121,6 +125,7 @@ class MainActivity : Activity() {
                 adjustViewBounds = true
             }
             this += qrImage
+            this += button("🚫 解除 iPhone 綁定") { confirmUnbind() }
             this += button("🔄 重新產生配對（舊 iPhone 會失效）") { confirmRegenerate() }
         }
 
@@ -161,12 +166,14 @@ class MainActivity : Activity() {
             qrImage.visibility = View.VISIBLE
             qrBtn.text = "🙈 收起 QR"
             window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-            main.postDelayed(hideQr, 120_000)
+            Pairing.openEnroll(this, QR_MS)
+            main.postDelayed(hideQr, QR_MS)
         } else {
             qrImage.setImageDrawable(null)
             qrImage.visibility = View.GONE
             qrBtn.text = "📷 顯示配對 QR"
             window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            Pairing.closeEnroll(this)
         }
     }
 
@@ -178,6 +185,19 @@ class MainActivity : Activity() {
                 Pairing.regenerate(this)
                 restartIfRunning()
                 showQr(true)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun confirmUnbind() {
+        AlertDialog.Builder(this)
+            .setTitle("解除 iPhone 綁定？")
+            .setMessage("iPhone 會立刻斷線，要重新掃 QR、綁 Face ID 才能再連。")
+            .setPositiveButton("解除") { _, _ ->
+                Pairing.clearViewer(this)
+                restartIfRunning()
+                render()
             }
             .setNegativeButton("取消", null)
             .show()
@@ -264,6 +284,7 @@ class MainActivity : Activity() {
     private operator fun LinearLayout.plusAssign(view: View) = addView(view)
 
     companion object {
+        private const val QR_MS = 120_000L
         private val CANVAS = 0xFFECFEFD.toInt()
         private val SURFACE = 0xFFFBFFFF.toInt()
         private val INPUT = 0xFFFCFFFF.toInt()
