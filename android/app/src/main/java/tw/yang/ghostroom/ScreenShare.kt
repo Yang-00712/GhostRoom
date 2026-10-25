@@ -17,8 +17,8 @@ import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import kotlin.math.roundToInt
 
-/** 一組畫質設定。寬是縮圖後的短邊上限，fps 是每秒格數上限，kbps 是位元率。 */
-data class Profile(val id: String, val width: Int, val fps: Int, val kbps: Int)
+/** 一組畫質設定。fps 是每秒格數上限，kbps 是位元率。解析度固定，不隨畫質變。 */
+data class Profile(val id: String, val fps: Int, val kbps: Int)
 
 /** 錄整個螢幕成一條影像。授權一次後一直開著，每次 iPhone 連線共用同一條。 */
 class ScreenShare(
@@ -49,8 +49,8 @@ class ScreenShare(
         val tex = SurfaceTextureHelper.create("screen", egl.eglBaseContext)
         val frameTap = FrameTap(src.capturerObserver, profile.fps)
         cap.initialize(tex, ctx, frameTap)
-        val (w, h) = captureSize(profile.width)
-        cap.startCapture(w, h, profile.fps)
+        val (w, h) = captureSize()
+        cap.startCapture(w, h, CAPTURE_FPS)
         capturer = cap
         source = src
         helper = tex
@@ -58,12 +58,10 @@ class ScreenShare(
         track = factory.createVideoTrack("screen", src)
     }
 
-    /** 連線中切換畫質：不用重新授權，直接改錄影的解析度和格數。 */
+    /** 連線中切換畫質：只改格數上限，不動解析度（避免重建虛擬顯示器，在入門機不穩）。 */
     fun applyProfile(p: Profile) {
         profile = p
         tap?.setFps(p.fps)
-        val (w, h) = captureSize(p.width)
-        runCatching { capturer?.changeCaptureFormat(w, h, p.fps) }
     }
 
     fun stop() {
@@ -80,15 +78,16 @@ class ScreenShare(
         tap = null
     }
 
+    /** 縮到 CAPTURE_WIDTH 以內，寬高都對齊到 16 的倍數 —— 硬體編碼器要求，不然一格都壓不出來。 */
     @Suppress("DEPRECATION")
-    private fun captureSize(maxWidth: Int): Pair<Int, Int> {
+    private fun captureSize(): Pair<Int, Int> {
         val size = Point()
         ctx.getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY).getRealSize(size)
         val w = minOf(size.x, size.y)
         val h = maxOf(size.x, size.y)
-        val scale = minOf(1.0, maxWidth.toDouble() / w)
-        val even = { v: Double -> (v.roundToInt() / 2) * 2 }
-        return even(w * scale) to even(h * scale)
+        val scale = minOf(1.0, CAPTURE_WIDTH.toDouble() / w)
+        val align16 = { v: Double -> ((v / 16).roundToInt().coerceAtLeast(1)) * 16 }
+        return align16(w * scale) to align16(h * scale)
     }
 
     /**
@@ -182,8 +181,10 @@ class ScreenShare(
     }
 
     companion object {
-        val SMOOTH = Profile("smooth", 540, 20, 1800)
-        val CLEAR = Profile("clear", 720, 30, 3500)
+        private const val CAPTURE_WIDTH = 544
+        private const val CAPTURE_FPS = 30
+        val SMOOTH = Profile("smooth", 20, 1500)
+        val CLEAR = Profile("clear", 30, 3000)
         fun profileOf(id: String?): Profile = if (id == "clear") CLEAR else SMOOTH
     }
 }
